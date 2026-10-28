@@ -1,5 +1,5 @@
 // Syvyys service worker: keeps the app itself offline and remembers map tiles you've already viewed.
-const APP = "syvyys-app-v3";
+const APP = "syvyys-app-v5";
 const TILES = "syvyys-tiles-v1";
 const MAX_TILES = 1500; // roughly 20–40 MB at most
 

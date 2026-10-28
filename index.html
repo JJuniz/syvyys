@@ -49,6 +49,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--shallow);outlin
 .fab{width:52px;height:52px;border-radius:50%;border:0;background:var(--paper);color:var(--deep);box-shadow:0 2px 10px rgba(0,0,0,.25);display:grid;place-items:center}
 .fab svg{width:26px;height:26px}
 .fab.on{background:var(--deep);color:#fff}
+/* the location button stands out from the others; it turns reed-green while following you */
+#btnGps{width:60px;height:60px;background:var(--deep);color:#fff}
+#btnGps.on{background:var(--reed);color:#1f2a0c}
 @media (prefers-color-scheme: dark){.fab{color:#bfe3ee}}
 
 /* bottom sheet */
@@ -100,11 +103,11 @@ input[type=text].field{width:100%;box-sizing:border-box;padding:9px;border:1px s
   <button class="fab" id="btnLayers" aria-label="Map layers" title="Map layers">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>
   </button>
-  <button class="fab" id="btnSpots" aria-label="My spots" title="My spots">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+  <button class="fab" id="btnSpots" aria-label="Saved spots" title="Saved spots">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>
   </button>
   <button class="fab" id="btnGps" aria-label="Show my location" title="My location">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M21 3 3 10.5l7.5 3L13.5 21 21 3Z"/></svg>
   </button>
 </div>
 
@@ -149,7 +152,7 @@ input[type=text].field{width:100%;box-sizing:border-box;padding:9px;border:1px s
 <section class="sheet" id="sheetSpots" aria-label="My spots">
   <div class="grab"></div>
   <button class="close" data-close aria-label="Close">×</button>
-  <h2>My spots</h2>
+  <h2>Saved spots</h2>
   <p class="note">Tap the water, then "Save spot". Spots are stored only on this phone.</p>
   <div id="spotList"></div>
 </section>
@@ -411,12 +414,22 @@ $("btnGps").onclick = () => {
     [meMarker, meCircle].forEach(l => l && map.removeLayer(l)); meMarker = meCircle = null;
     $("btnGps").classList.remove("on"); $("hereChip").hidden = true; return;
   }
-  if (!navigator.geolocation){ toast("This browser can't share location"); return; }
-  follow = true; $("btnGps").classList.add("on"); toast("Finding your location…");
-  watchId = navigator.geolocation.watchPosition(onPos, err => {
-    toast(err.code === 1 ? "Location permission denied. Allow it in Chrome settings." : "Couldn't get your location");
-    if (err.code === 1){ navigator.geolocation.clearWatch(watchId); watchId = null; $("btnGps").classList.remove("on"); }
-  }, {enableHighAccuracy:true, maximumAge:5000, timeout:20000});
+  if (!navigator.geolocation || !window.isSecureContext){ toast("This browser can't share location here", 5000); return; }
+  follow = true; $("btnGps").classList.add("on"); toast("Finding your location…", 4000);
+  let gotFix = false;
+  const stop = () => { if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null; $("btnGps").classList.remove("on"); };
+  const fail = err => {
+    if (err.code === 1){
+      stop();
+      toast("Location is blocked. Allow it: Chrome ⋮ → Settings → Site settings → Location, and turn on the phone's Location setting.", 9000);
+    } else if (!gotFix){
+      toast(err.code === 2 ? "Phone location is off or unavailable. Turn on Location in the phone's quick settings." : "Still looking for GPS… it's faster outdoors.", 6000);
+    }
+  };
+  // 1) quick approximate position (Wi-Fi / mobile network) so the map jumps to you right away
+  navigator.geolocation.getCurrentPosition(p => { if (!gotFix && watchId !== null){ gotFix = true; onPos(p); } }, () => {}, {enableHighAccuracy:false, maximumAge:120000, timeout:8000});
+  // 2) precise GPS that keeps following you
+  watchId = navigator.geolocation.watchPosition(p => { gotFix = true; onPos(p); }, fail, {enableHighAccuracy:true, maximumAge:5000, timeout:30000});
 };
 map.on("dragstart", () => { follow = false; });
 async function onPos(pos){
