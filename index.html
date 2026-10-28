@@ -120,7 +120,7 @@ input[type=text].field{width:100%;box-sizing:border-box;padding:9px;border:1px s
     <button data-base="mml">Maastokartta</button>
   </div>
   <div id="mmlBox" hidden>
-    <p class="note">Maanmittauslaitos' terrain map needs a free API key. Get one by registering at maanmittauslaitos.fi (search "API-avain"), then paste it here. It stays on this phone.</p>
+    <p class="note">Maanmittauslaitos' terrain map shows lake depth lines and depth numbers when you zoom in close. It needs a free API key: register in Maanmittauslaitos' "Oma tili" service for open interfaces, create a key there, and paste it here. The key stays on this phone.</p>
     <input class="field" id="mmlKey" type="text" placeholder="MML API key" autocomplete="off">
     <div class="btns"><button class="btn" id="saveKey">Save key</button></div>
   </div>
@@ -182,8 +182,26 @@ map.on("moveend", () => { store.set("view", {c:[map.getCenter().lat, map.getCent
 const bases = {
   osm: () => L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, crossOrigin:true, attribution:"© OpenStreetMap"}),
   topo: () => L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {maxZoom:17, subdomains:"abc", crossOrigin:true, attribution:"© OpenStreetMap, SRTM | © OpenTopoMap"}),
-  mml: () => L.tileLayer("https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/maastokartta/default/WGS84_Pseudo-Mercator/{z}/{y}/{x}.png?api-key=" + encodeURIComponent(store.get("mmlKey","")), {maxZoom:18, crossOrigin:true, attribution:"© Maanmittauslaitos"})
+  mml: () => mmlLayer(true)
 };
+// Maanmittauslaitos terrain map. Shows lake depth lines and depth numbers when zoomed in.
+// Tries a cacheable (CORS) request first; if tiles fail that way, falls back to plain image loading.
+function mmlLayer(cors){
+  const key = encodeURIComponent(store.get("mmlKey",""));
+  const l = L.tileLayer("https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/maastokartta/default/WGS84_Pseudo-Mercator/{z}/{y}/{x}.png?api-key=" + key,
+    {maxZoom:18, crossOrigin: cors || undefined, attribution:"© Maanmittauslaitos"});
+  let errors = 0, loaded = 0;
+  l.on("tileload", () => loaded++);
+  l.on("tileerror", () => {
+    errors++;
+    if (cors && loaded === 0 && errors === 3 && baseName === "mml"){
+      map.removeLayer(l); baseLayer = mmlLayer(false).addTo(map); baseLayer.bringToBack();
+    } else if (!cors && loaded === 0 && errors === 6){
+      toast("Maastokartta didn't load. Check that your MML API key is correct.", 5000);
+    }
+  });
+  return l;
+}
 let baseLayer = null, baseName = store.get("base","osm");
 function setBase(name){
   if (name === "mml" && !store.get("mmlKey","")) { $("mmlBox").hidden = false; toast("Add your free MML API key first"); name = baseName === "mml" ? "osm" : baseName; }
@@ -192,17 +210,29 @@ function setBase(name){
   baseLayer = bases[name]().addTo(map); baseLayer.bringToBack();
   baseName = name; store.set("base", name);
   document.querySelectorAll("#baseSeg button").forEach(b => b.classList.toggle("on", b.dataset.base === name));
+  // Maastokartta already prints depth lines and numbers, so make our colored depth shading
+  // see-through enough that those numbers stay readable underneath.
+  if (typeof lyr !== "undefined"){
+    lyr.sea.setOpacity(name === "mml" ? .35 : .75);
+    lyr.lake.setOpacity(name === "mml" ? .35 : .85);
+  }
 }
 
-const wms = (url, layers, extra={}) => L.tileLayer.wms(url, Object.assign({layers, format:"image/png", transparent:true, version:"1.3.0", crossOrigin:true, opacity:.85}, extra));
+// Speed: each data source is ONE layer (areas, contours and optional depth numbers drawn in a
+// single image), fetched in large 512 px pieces, and only refreshed once the map stops moving.
+const wms = (url, layers, extra={}) => L.tileLayer.wms(url, Object.assign({
+  layers, format:"image/png", transparent:true, version:"1.3.0", crossOrigin:true, opacity:.85,
+  tileSize:512, updateWhenZooming:false, updateWhenIdle:true, keepBuffer:1
+}, extra));
+const seaLayers  = n => "DepthArea_A,DepthContour_L" + (n ? ",Sounding_P" : "");
+const lakeLayers = n => "EL.Syvyysalue,EL.ContourLine" + (n ? ",EL.SpotElevation" : "");
+const saved = store.get("layers", {lySea:true, lyLake:true, lySoundings:false, lySprings:true});
 const lyr = {
-  sea:   wms(TRAFI, "DepthArea_A,DepthContour_L", {attribution:"Depths: Traficom (not for navigation)", opacity:.75}),
-  lake:  wms(SYKE, "EL.Syvyysalue,EL.ContourLine", {attribution:"Lake depths: Syke CC BY 4.0", minZoom:LAKE_MINZOOM}),
-  sound: L.layerGroup([wms(TRAFI, "Sounding_P"), wms(SYKE, "EL.SpotElevation", {minZoom:LAKE_MINZOOM})]),
+  sea:   wms(TRAFI, seaLayers(saved.lySoundings), {attribution:"Depths: Traficom (not for navigation)", opacity:.75}),
+  lake:  wms(SYKE, lakeLayers(saved.lySoundings), {attribution:"Lake depths: Syke CC BY 4.0", minZoom:LAKE_MINZOOM}),
   springs: L.layerGroup()
 };
-const toggles = {lySea:"sea", lyLake:"lake", lySoundings:"sound", lySprings:"springs"};
-const saved = store.get("layers", {lySea:true, lyLake:true, lySoundings:false, lySprings:true});
+const toggles = {lySea:"sea", lyLake:"lake", lySprings:"springs"};
 Object.entries(toggles).forEach(([id, key]) => {
   const cb = $(id); cb.checked = !!saved[id];
   if (cb.checked) lyr[key].addTo(map);
@@ -212,6 +242,13 @@ Object.entries(toggles).forEach(([id, key]) => {
     if (key === "springs") loadSprings(true);
     updateHint();
   });
+});
+// Depth numbers are added into the same images instead of being separate layers.
+$("lySoundings").checked = !!saved.lySoundings;
+$("lySoundings").addEventListener("change", e => {
+  saved.lySoundings = e.target.checked; store.set("layers", saved);
+  lyr.sea.setParams({layers: seaLayers(saved.lySoundings)});
+  lyr.lake.setParams({layers: lakeLayers(saved.lySoundings)});
 });
 setBase(baseName);
 
