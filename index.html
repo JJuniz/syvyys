@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Syvyys</title>
+<meta name="theme-color" content="#0d3b52">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* Layout: full-screen map; search bar on top, round tool buttons on the right, sheets slide up from the bottom. */
+:root{
+  --deep:#0d3b52;      /* lake-deep blue: bars, primary buttons */
+  --shallow:#5fb3c9;   /* shallow-water accent */
+  --reed:#c8d96f;      /* highlight for "you are here" depth chip */
+  --paper:#ffffff;
+  --ink:#14232b;
+  --mute:#5b6e77;
+  --line:#d7e1e5;
+  --good:#2f8f4e; --warn:#b7791f; --bad:#b23a3a;
+  --r:14px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{--paper:#13212a;--ink:#e6eef1;--mute:#9db0b8;--line:#2a3c46;--deep:#1d5d7d;color-scheme:dark}
+}
+html,body{height:100%;margin:0}
+body{font:15px/1.4 var(--font);color:var(--ink);background:var(--paper);overflow:hidden}
+#map{position:fixed;inset:0;background:#cfe3ea}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--shallow);outline-offset:2px}
+
+/* top search */
+.top{position:fixed;z-index:1000;top:calc(10px + env(safe-area-inset-top,0px));left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:6px}
+.searchbar{display:flex;align-items:center;gap:6px;background:var(--paper);border-radius:999px;box-shadow:0 2px 10px rgba(0,0,0,.18);padding:4px 4px 4px 14px}
+.searchbar input{flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font:inherit;font-size:16px;padding:8px 0}
+.searchbar input:focus{outline:none}
+.searchbar button{border:0;background:var(--deep);color:#fff;border-radius:999px;padding:8px 14px;font-weight:600}
+.results{background:var(--paper);border-radius:var(--r);box-shadow:0 2px 10px rgba(0,0,0,.18);max-height:50vh;overflow:auto}
+.results button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);padding:10px 14px}
+.results small{display:block;color:var(--mute);font-size:12px}
+.chip{align-self:center;background:var(--deep);color:#fff;border-radius:999px;padding:6px 12px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.chip.here{background:var(--reed);color:#1f2a0c;font-weight:700}
+
+/* right tools */
+.tools{position:fixed;z-index:1000;right:max(10px,env(safe-area-inset-right,0px));bottom:calc(28px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px}
+.fab{width:52px;height:52px;border-radius:50%;border:0;background:var(--paper);color:var(--deep);box-shadow:0 2px 10px rgba(0,0,0,.25);display:grid;place-items:center}
+.fab svg{width:26px;height:26px}
+.fab.on{background:var(--deep);color:#fff}
+@media (prefers-color-scheme: dark){.fab{color:#bfe3ee}}
+
+/* bottom sheet */
+.sheet{position:fixed;z-index:1100;left:0;right:0;bottom:0;background:var(--paper);border-radius:18px 18px 0 0;box-shadow:0 -4px 20px rgba(0,0,0,.25);max-height:75vh;overflow:auto;padding:8px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));transform:translateY(105%);transition:transform .22s ease}
+.sheet.open{transform:none}
+@media (prefers-reduced-motion:reduce){.sheet{transition:none}}
+.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:4px auto 10px}
+.sheet h2{font-size:18px;margin:0 0 4px}
+.sheet h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:16px 0 6px}
+.sheet .close{float:right;border:0;background:none;color:var(--mute);font-size:24px;line-height:1;padding:0 4px}
+.big{font-size:34px;font-weight:800;color:var(--deep);font-variant-numeric:tabular-nums;line-height:1.1}
+@media (prefers-color-scheme: dark){.big{color:#8fd3e6}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-variant-numeric:tabular-nums}
+.kv dt{color:var(--mute)} .kv dd{margin:0;font-weight:600}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.row label{flex:1}
+.row small{display:block;color:var(--mute)}
+.row input[type=checkbox]{width:22px;height:22px;accent-color:var(--deep)}
+.btn{border:0;border-radius:10px;padding:10px 14px;background:var(--deep);color:#fff;font-weight:600}
+.btn.ghost{background:transparent;color:var(--deep);border:1px solid var(--line)}
+@media (prefers-color-scheme: dark){.btn.ghost{color:#bfe3ee}}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.note{font-size:12px;color:var(--mute)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:none;color:var(--ink);border-radius:999px;padding:7px 12px}
+.seg button.on{background:var(--deep);border-color:var(--deep);color:#fff}
+.legend{display:flex;gap:2px;margin-top:6px}
+.legend span{flex:1;font-size:11px;text-align:center;padding:4px 0;color:#0b2633}
+input[type=text].field{width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:inherit}
+.leaflet-control-attribution{font-size:10px}
+.spring-ico{border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.toast{position:fixed;z-index:1200;left:50%;transform:translateX(-50%);bottom:calc(100px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--paper);padding:8px 14px;border-radius:999px;font-size:13px}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map"></div>
+
+<div class="top">
+  <form class="searchbar" id="searchForm" role="search">
+    <input id="q" type="text" placeholder="Search lake or place…" autocomplete="off" aria-label="Search lake or place">
+    <button type="submit">Search</button>
+  </form>
+  <div class="results" id="results" hidden></div>
+  <div class="chip" id="zoomHint" hidden>Zoom in to see lake depths</div>
+  <div class="chip here" id="hereChip" hidden></div>
+</div>
+
+<div class="tools">
+  <button class="fab" id="btnLayers" aria-label="Map layers" title="Map layers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>
+  </button>
+  <button class="fab" id="btnSpots" aria-label="My spots" title="My spots">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+  </button>
+  <button class="fab" id="btnGps" aria-label="Show my location" title="My location">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+  </button>
+</div>
+
+<!-- Layers sheet -->
+<section class="sheet" id="sheetLayers" aria-label="Map layers">
+  <div class="grab"></div>
+  <button class="close" data-close aria-label="Close">×</button>
+  <h2>Map layers</h2>
+  <h3>Background map</h3>
+  <div class="seg" id="baseSeg">
+    <button data-base="osm" class="on">Standard</button>
+    <button data-base="topo">Terrain</button>
+    <button data-base="mml">Maastokartta</button>
+  </div>
+  <div id="mmlBox" hidden>
+    <p class="note">Maanmittauslaitos' terrain map needs a free API key. Get one by registering at maanmittauslaitos.fi (search "API-avain"), then paste it here. It stays on this phone.</p>
+    <input class="field" id="mmlKey" type="text" placeholder="MML API key" autocomplete="off">
+    <div class="btns"><button class="btn" id="saveKey">Save key</button></div>
+  </div>
+  <h3>Depths and water</h3>
+  <div class="row"><input type="checkbox" id="lyLake" checked><label for="lyLake">Lake depths<small>Syke · small and mid-size lakes · visible when zoomed in</small></label></div>
+  <div class="row"><input type="checkbox" id="lySea" checked><label for="lySea">Sea and large-lake depths<small>Traficom · coast, Vaasa, Päijänne, Näsijärvi…</small></label></div>
+  <div class="row"><input type="checkbox" id="lySoundings"><label for="lySoundings">Depth numbers<small>Single measured depths (busier map)</small></label></div>
+  <div class="row"><input type="checkbox" id="lySprings" checked><label for="lySprings">Springs and drinking water<small>From OpenStreetMap · visible when zoomed in</small></label></div>
+  <h3>Depth colors</h3>
+  <div class="legend" aria-hidden="true">
+    <span style="background:#e8f6fa">0–1.5</span><span style="background:#c9eaf3">1.5–3</span><span style="background:#a6d8e8">3–6</span><span style="background:#7fc2da">6–10</span><span style="background:#5aa8c8;color:#fff">10+ m</span>
+  </div>
+  <p class="note">Shades differ a little between Syke and Traficom. Tap anywhere on the water to read the exact depth range.</p>
+  <h3>About the data</h3>
+  <p class="note">Lake depths: Finnish Environment Institute Syke, CC BY 4.0. Sea and fairway depths: contains data from the Finnish Transport and Communications Agency Traficom's nautical chart database, 10/2026; licence: traficom.fi. Not for navigation. Background map © OpenStreetMap contributors. Many small lakes have never been depth-surveyed.</p>
+</section>
+
+<!-- Info sheet (tap result) -->
+<section class="sheet" id="sheetInfo" aria-label="Depth here">
+  <div class="grab"></div>
+  <button class="close" data-close aria-label="Close">×</button>
+  <div id="infoBody"></div>
+</section>
+
+<!-- Spots sheet -->
+<section class="sheet" id="sheetSpots" aria-label="My spots">
+  <div class="grab"></div>
+  <button class="close" data-close aria-label="Close">×</button>
+  <h2>My spots</h2>
+  <p class="note">Tap the water, then "Save spot". Spots are stored only on this phone.</p>
+  <div id="spotList"></div>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+"use strict";
+const SYKE = "https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wms";
+const SYKE_WFS = "https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/ows";
+const TRAFI = "https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wms";
+const LAKE_MINZOOM = 11;
+
+const store = {
+  get(k, d){ try { const v = localStorage.getItem("syv_"+k); return v==null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem("syv_"+k, JSON.stringify(v)); } catch(e){} }
+};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toast(msg, ms=2500){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, ms); }
+
+/* ---------- map ---------- */
+const view = store.get("view", {c:[61.48,23.5], z:9});
+const map = L.map("map", {zoomControl:false, attributionControl:true, maxZoom:18, minZoom:5, maxBounds:[[57,15],[72,35]]}).setView(view.c, view.z);
+map.attributionControl.setPrefix(false);
+map.on("moveend", () => { store.set("view", {c:[map.getCenter().lat, map.getCenter().lng], z:map.getZoom()}); updateHint(); loadSprings(); });
+
+const bases = {
+  osm: () => L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, crossOrigin:true, attribution:"© OpenStreetMap"}),
+  topo: () => L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {maxZoom:17, subdomains:"abc", crossOrigin:true, attribution:"© OpenStreetMap, SRTM | © OpenTopoMap"}),
+  mml: () => L.tileLayer("https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/maastokartta/default/WGS84_Pseudo-Mercator/{z}/{y}/{x}.png?api-key=" + encodeURIComponent(store.get("mmlKey","")), {maxZoom:18, crossOrigin:true, attribution:"© Maanmittauslaitos"})
+};
+let baseLayer = null, baseName = store.get("base","osm");
+function setBase(name){
+  if (name === "mml" && !store.get("mmlKey","")) { $("mmlBox").hidden = false; toast("Add your free MML API key first"); name = baseName === "mml" ? "osm" : baseName; }
+  else $("mmlBox").hidden = name !== "mml";
+  if (baseLayer) map.removeLayer(baseLayer);
+  baseLayer = bases[name]().addTo(map); baseLayer.bringToBack();
+  baseName = name; store.set("base", name);
+  document.querySelectorAll("#baseSeg button").forEach(b => b.classList.toggle("on", b.dataset.base === name));
+}
+
+const wms = (url, layers, extra={}) => L.tileLayer.wms(url, Object.assign({layers, format:"image/png", transparent:true, version:"1.3.0", crossOrigin:true, opacity:.85}, extra));
+const lyr = {
+  sea:   wms(TRAFI, "DepthArea_A,DepthContour_L", {attribution:"Depths: Traficom (not for navigation)", opacity:.75}),
+  lake:  wms(SYKE, "EL.Syvyysalue,EL.ContourLine", {attribution:"Lake depths: Syke CC BY 4.0", minZoom:LAKE_MINZOOM}),
+  sound: L.layerGroup([wms(TRAFI, "Sounding_P"), wms(SYKE, "EL.SpotElevation", {minZoom:LAKE_MINZOOM})]),
+  springs: L.layerGroup()
+};
+const toggles = {lySea:"sea", lyLake:"lake", lySoundings:"sound", lySprings:"springs"};
+const saved = store.get("layers", {lySea:true, lyLake:true, lySoundings:false, lySprings:true});
+Object.entries(toggles).forEach(([id, key]) => {
+  const cb = $(id); cb.checked = !!saved[id];
+  if (cb.checked) lyr[key].addTo(map);
+  cb.addEventListener("change", () => {
+    cb.checked ? lyr[key].addTo(map) : map.removeLayer(lyr[key]);
+    saved[id] = cb.checked; store.set("layers", saved);
+    if (key === "springs") loadSprings(true);
+    updateHint();
+  });
+});
+setBase(baseName);
+
+function updateHint(){ $("zoomHint").hidden = !( $("lyLake").checked && map.getZoom() < LAKE_MINZOOM ); }
+updateHint();
+
+/* ---------- sheets ---------- */
+const sheets = ["sheetLayers","sheetInfo","sheetSpots"];
+function openSheet(id){ sheets.forEach(s => $(s).classList.toggle("open", s === id)); }
+function closeSheets(){ sheets.forEach(s => $(s).classList.remove("open")); }
+document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", closeSheets));
+$("btnLayers").onclick = () => openSheet("sheetLayers");
+$("btnSpots").onclick = () => { renderSpots(); openSheet("sheetSpots"); };
+$("baseSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (b) setBase(b.dataset.base); });
+$("mmlKey").value = store.get("mmlKey","");
+$("saveKey").onclick = () => { store.set("mmlKey", $("mmlKey").value.trim()); if ($("mmlKey").value.trim()) { setBase("mml"); toast("Key saved"); } };
+
+/* ---------- depth lookup ---------- */
+function featureInfoUrl(base, layer, latlng){
+  // tiny 3x3 px box around the point in EPSG:3857
+  const p = L.CRS.EPSG3857.project(latlng);
+  const res = 156543.03392 / Math.pow(2, Math.max(map.getZoom(), 12));
+  const h = res * 5;
+  const bbox = [p.x-h, p.y-h, p.x+h, p.y+h].join(",");
+  return `${base}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetFeatureInfo&LAYERS=${layer}&QUERY_LAYERS=${layer}&STYLES=&CRS=EPSG:3857&BBOX=${bbox}&WIDTH=11&HEIGHT=11&I=5&J=5&INFO_FORMAT=application/json&FEATURE_COUNT=1`;
+}
+async function getJSON(url, ms=9000){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, {signal: ctl.signal}); if (!r.ok) throw new Error(r.status); return await r.json(); }
+  finally { clearTimeout(t); }
+}
+const lakeCache = new Map();
+async function lakeStats(id){
+  if (lakeCache.has(id)) return lakeCache.get(id);
+  const u = `${SYKE_WFS}?service=WFS&version=2.0.0&request=GetFeature&typeNames=inspire_el:EL.SpotElevation&count=1&outputFormat=application/json&cql_filter=` + encodeURIComponent(`jarvitunnus='${id.replace(/'/g,"")}'`);
+  const j = await getJSON(u); const p = j.features?.[0]?.properties || null;
+  lakeCache.set(id, p); return p;
+}
+async function depthAt(latlng){
+  const out = {};
+  const [s, t] = await Promise.allSettled([
+    getJSON(featureInfoUrl(SYKE, "EL.Syvyysalue", latlng)),
+    getJSON(featureInfoUrl(TRAFI, "DepthArea_A", latlng))
+  ]);
+  if (s.status === "fulfilled" && s.value.features?.length){
+    const p = s.value.features[0].properties;
+    out.range = p.syvyysvali_m; out.name = p.syvmittausaluenimi; out.lakeId = p.jarvitunnus; out.src = "Syke";
+  }
+  if (!out.range && t.status === "fulfilled" && t.value.features?.length){
+    const p = t.value.features[0].properties;
+    const a = parseFloat(p.DRVAL1), b = parseFloat(p.DRVAL2);
+    if (!isNaN(a)) { out.range = isNaN(b) ? `${a}+` : `${a}–${b}`; out.src = "Traficom"; out.surveyed = p.SORDAT; }
+  }
+  out.failed = s.status === "rejected" && t.status === "rejected";
+  return out;
+}
+function fmtRange(r){ return r ? String(r).replace("-", "–").replace(/,/g, ".") + " m" : null; }
+
+let tapMarker = null;
+map.on("click", async e => {
+  $("results").hidden = true;
+  if (tapMarker) map.removeLayer(tapMarker);
+  tapMarker = L.circleMarker(e.latlng, {radius:7, color:"#0d3b52", weight:3, fillColor:"#c8d96f", fillOpacity:1}).addTo(map);
+  $("infoBody").innerHTML = `<h2>Checking depth…</h2><p class="note">${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}</p>`;
+  openSheet("sheetInfo");
+  const d = await depthAt(e.latlng);
+  let html = "";
+  if (d.range){
+    html += `<p class="note">Depth here (${esc(d.src)})</p><div class="big">${esc(fmtRange(d.range))}</div>`;
+    if (d.name) html += `<h2 style="margin-top:8px">${esc(d.name)}</h2>`;
+    html += `<dl class="kv" id="lakeKv"></dl>`;
+  } else if (d.failed){
+    html += `<h2>No connection</h2><p class="note">Couldn't reach the depth services. Check your mobile data and tap again.</p>`;
+  } else {
+    html += `<h2>No depth data here</h2><p class="note">Either this is land, or this water hasn't been depth-surveyed. Try zooming in and tapping in the middle of the lake.</p>`;
+  }
+  html += `<p class="note">${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}</p>`;
+  html += `<div class="btns"><button class="btn" id="saveSpot">Save spot</button></div>`;
+  $("infoBody").innerHTML = html;
+  $("saveSpot").onclick = () => saveSpot(e.latlng, d);
+  if (d.lakeId){
+    try {
+      const p = await lakeStats(d.lakeId);
+      if (p && $("lakeKv")) $("lakeKv").innerHTML =
+        (p.syvyyssuurin_m!=null ? `<dt>Max depth</dt><dd>${(+p.syvyyssuurin_m).toFixed(1)} m</dd>` : "") +
+        (p.syvyyskeski_m!=null ? `<dt>Average depth</dt><dd>${(+p.syvyyskeski_m).toFixed(1)} m</dd>` : "") +
+        (p.vesiala_ha!=null ? `<dt>Area</dt><dd>${(+p.vesiala_ha).toLocaleString("fi-FI",{maximumFractionDigits:0})} ha</dd>` : "") +
+        (p.rantapituus_km!=null ? `<dt>Shoreline</dt><dd>${(+p.rantapituus_km).toFixed(1)} km</dd>` : "");
+    } catch(err){}
+  }
+});
+
+/* ---------- springs (OpenStreetMap via Overpass) ---------- */
+let springBusy = false, springKey = "";
+const springDone = new Set();
+function springIcon(kind){
+  const col = kind === "yes" ? "#2f8f4e" : kind === "no" ? "#8a8f92" : "#2b7fb8";
+  return L.divIcon({className:"", html:`<div class="spring-ico" style="width:16px;height:16px;background:${col}"></div>`, iconSize:[20,20], iconAnchor:[10,10]});
+}
+async function loadSprings(force){
+  if (!$("lySprings").checked || map.getZoom() < 11 || springBusy) return;
+  const b = map.getBounds();
+  // snap to a 0.2° grid so panning back and forth doesn't refetch
+  const g = 0.2, s = Math.floor(b.getSouth()/g)*g, w = Math.floor(b.getWest()/g)*g, n = Math.ceil(b.getNorth()/g)*g, e = Math.ceil(b.getEast()/g)*g;
+  const key = [s,w,n,e].map(v=>v.toFixed(1)).join(",");
+  if (key === springKey && !force) return;
+  springKey = key;
+  if (springDone.has(key)) return;
+  springBusy = true;
+  const q = `[out:json][timeout:20];(node["natural"="spring"](${s},${w},${n},${e});node["amenity"="drinking_water"](${s},${w},${n},${e}););out body 400;`;
+  try {
+    const r = await fetch("https://overpass-api.de/api/interpreter", {method:"POST", body:"data="+encodeURIComponent(q), headers:{"Content-Type":"application/x-www-form-urlencoded"}});
+    const j = await r.json();
+    springDone.add(key);
+    j.elements.forEach(el => {
+      if (lyr.springs._ids?.has(el.id)) return;
+      (lyr.springs._ids ||= new Set()).add(el.id);
+      const t = el.tags || {};
+      const isTap = t.amenity === "drinking_water";
+      const dw = isTap ? "yes" : (t.drinking_water || "unknown");
+      const label = isTap ? "Drinking water point" : "Spring";
+      const dwText = dw === "yes" ? "Marked as drinkable" : dw === "no" ? "Marked as not drinkable" : "Drinkability not known";
+      L.marker([el.lat, el.lon], {icon: springIcon(dw)}).bindPopup(
+        `<b>${esc(t.name || label)}</b><br>${label}<br>${dwText}` +
+        (isTap ? "" : `<br><small>Spring water can contain bacteria. Boil or test it unless the spring is officially monitored.</small>`)
+      ).addTo(lyr.springs);
+    });
+  } catch(err){ springKey = ""; toast("Couldn't load springs right now"); }
+  finally { springBusy = false; }
+}
+loadSprings();
+
+/* ---------- search (OpenStreetMap Nominatim) ---------- */
+$("searchForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const q = $("q").value.trim(); if (!q) return;
+  const box = $("results"); box.hidden = false; box.innerHTML = `<button disabled>Searching…</button>`;
+  try {
+    const j = await getJSON(`https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=fi&limit=8&accept-language=fi&q=${encodeURIComponent(q)}`);
+    const WATER = ["lake","water","pond","reservoir","river","bay","stream","strait","spring"];
+    const isW = r => WATER.includes(r.type) || r.category === "water" || r.category === "natural";
+    j.sort((a,b) => isW(b) - isW(a));
+    if (!j.length){ box.innerHTML = `<button disabled>No matches for "${esc(q)}"</button>`; return; }
+    box.innerHTML = j.map((r,i) => `<button data-i="${i}">${esc(r.name || r.display_name.split(",")[0])}<small>${esc(isW(r) ? "Water · " + r.type : r.type)} · ${esc(r.display_name.split(",").slice(1,3).join(","))}</small></button>`).join("");
+    box.onclick = ev => {
+      const b = ev.target.closest("button[data-i]"); if (!b) return;
+      const r = j[+b.dataset.i]; const bb = r.boundingbox.map(Number);
+      map.fitBounds([[bb[0],bb[2]],[bb[1],bb[3]]], {maxZoom:14, padding:[20,20]});
+      box.hidden = true; $("q").blur();
+    };
+  } catch(err){ box.innerHTML = `<button disabled>Search failed. Check your connection.</button>`; }
+});
+
+/* ---------- GPS ---------- */
+let watchId = null, meMarker = null, meCircle = null, follow = true, lastDepthPos = null, lastDepthTime = 0;
+$("btnGps").onclick = () => {
+  if (watchId !== null){
+    if (!follow && meMarker){ follow = true; map.setView(meMarker.getLatLng(), Math.max(map.getZoom(), 14)); return; }
+    navigator.geolocation.clearWatch(watchId); watchId = null;
+    [meMarker, meCircle].forEach(l => l && map.removeLayer(l)); meMarker = meCircle = null;
+    $("btnGps").classList.remove("on"); $("hereChip").hidden = true; return;
+  }
+  if (!navigator.geolocation){ toast("This browser can't share location"); return; }
+  follow = true; $("btnGps").classList.add("on"); toast("Finding your location…");
+  watchId = navigator.geolocation.watchPosition(onPos, err => {
+    toast(err.code === 1 ? "Location permission denied. Allow it in Chrome settings." : "Couldn't get your location");
+    if (err.code === 1){ navigator.geolocation.clearWatch(watchId); watchId = null; $("btnGps").classList.remove("on"); }
+  }, {enableHighAccuracy:true, maximumAge:5000, timeout:20000});
+};
+map.on("dragstart", () => { follow = false; });
+async function onPos(pos){
+  const ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
+  if (!meMarker){
+    meCircle = L.circle(ll, {radius:pos.coords.accuracy, color:"#2b7fb8", weight:1, fillOpacity:.12, interactive:false}).addTo(map);
+    meMarker = L.circleMarker(ll, {radius:8, color:"#fff", weight:3, fillColor:"#2b7fb8", fillOpacity:1}).addTo(map);
+    map.setView(ll, Math.max(map.getZoom(), 14));
+  } else {
+    meMarker.setLatLng(ll); meCircle.setLatLng(ll).setRadius(pos.coords.accuracy);
+    if (follow) map.panTo(ll);
+  }
+  // live depth under you: at most every 15 s, or after moving 25 m
+  const now = Date.now();
+  if (lastDepthPos && now - lastDepthTime < 15000 && ll.distanceTo(lastDepthPos) < 25) return;
+  lastDepthPos = ll; lastDepthTime = now;
+  const d = await depthAt(ll);
+  const chip = $("hereChip");
+  if (d.range){ chip.textContent = `Under you: ${fmtRange(d.range)}` + (d.name ? ` · ${d.name}` : ""); chip.hidden = false; }
+  else chip.hidden = true;
+}
+
+/* ---------- saved spots ---------- */
+const spotLayer = L.layerGroup().addTo(map);
+function spots(){ return store.get("spots", []); }
+function drawSpots(){
+  spotLayer.clearLayers();
+  spots().forEach(s => L.marker([s.lat, s.lng], {icon: L.divIcon({className:"", html:`<div style="width:14px;height:14px;background:#c8d96f;border:3px solid #0d3b52;border-radius:50% 50% 50% 0;transform:rotate(-45deg)"></div>`, iconSize:[20,20], iconAnchor:[10,18]})})
+    .bindPopup(`<b>${esc(s.name)}</b>${s.depth ? "<br>"+esc(s.depth) : ""}`).addTo(spotLayer));
+}
+function saveSpot(ll, d){
+  const list = spots();
+  const name = (d.name ? d.name + " " : "Spot ") + (list.length + 1);
+  list.push({id: Date.now(), name, lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6), depth: d.range ? fmtRange(d.range) : "", t: new Date().toISOString().slice(0,10)});
+  store.set("spots", list); drawSpots(); toast("Spot saved");
+}
+function renderSpots(){
+  const list = spots();
+  $("spotList").innerHTML = list.length ? list.slice().reverse().map(s => `
+    <div class="row"><label><input type="text" class="field" data-name="${s.id}" value="${esc(s.name)}" aria-label="Spot name"><small>${esc(s.depth || "depth unknown")} · saved ${esc(s.t)}</small></label>
+    <button class="btn ghost" data-go="${s.id}">Show</button><button class="btn ghost" data-del="${s.id}" aria-label="Delete spot">✕</button></div>`).join("")
+    : `<p class="note" style="margin-top:12px">No spots yet.</p>`;
+}
+$("spotList").addEventListener("click", e => {
+  const go = e.target.closest("[data-go]"), del = e.target.closest("[data-del]");
+  if (go){ const s = spots().find(x => x.id == go.dataset.go); if (s){ closeSheets(); map.setView([s.lat, s.lng], 15); } }
+  if (del){ store.set("spots", spots().filter(x => x.id != del.dataset.del)); drawSpots(); renderSpots(); }
+});
+$("spotList").addEventListener("change", e => {
+  const inp = e.target.closest("[data-name]"); if (!inp) return;
+  store.set("spots", spots().map(x => x.id == inp.dataset.name ? {...x, name: inp.value.trim() || x.name} : x)); drawSpots();
+});
+drawSpots();
+
+/* ---------- offline cache ---------- */
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(()=>{});
+})();
+</script>
+</body>
+</html>
